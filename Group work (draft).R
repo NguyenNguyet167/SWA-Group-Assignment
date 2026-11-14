@@ -1,7 +1,7 @@
 # ================================================================
 # COMP3020 SOCIAL WEB ANALYTICS - COMPLETE PROJECT R SCRIPT
 # Topic: FIFA World Cup 2026 (Bluesky Data)
-# Author: Nguyễn Minh Nguyệt (Ming) & Teammate
+# Author: Nguyễn Minh Nguyệt & Nguyễn Phúc Gia Thuỵ
 # ================================================================
 
 # ================================================================
@@ -23,17 +23,14 @@ library(igraph)
 # ================================================================
 # QUESTION 1: TREND & TIME SERIES ANALYSIS
 # ================================================================
-cat("\n--- RUNNING QUESTION 1 ---\n")
 
 # 1. Read dataset
-cat("Please select your 'FIFA_WorldCup2026_14Days_Clean.csv' file:\n")
 df <- read.csv(file.choose(), stringsAsFactors = FALSE)
 df$date <- as.Date(df$created_at)
 
 # a) Subtopic Classification (VAR & Refereeing)
 keywords <- "var|referee|ref|penalty|foul|red card|yellow card"
 df$subtopic <- ifelse(grepl(keywords, df$text, ignore.case = TRUE), "Subtopic", "No-Subtopic")
-cat("Subtopic distribution:\n")
 print(table(df$subtopic))
 
 # b) Chi-square Test (Before vs After July 19, excluding event day)
@@ -48,6 +45,16 @@ print(contingency_tab)
 chisq_res <- chisq.test(contingency_tab)
 cat("Chi-Square Test Results:\n")
 print(chisq_res)
+
+# c) Tính Twitter's Chi-square (Log-Likelihood ratio G^2) ---
+row_totals <- rowSums(contingency_tab)
+col_totals <- colSums(contingency_tab)
+total <- sum(contingency_tab)
+expected <- outer(row_totals, col_totals) / total
+
+# Công thức Log-Likelihood chuyên dụng cho văn bản (Twitter's Chi-square)
+twitter_chisq <- 2 * sum(contingency_tab * log(contingency_tab / expected), na.rm = TRUE)
+cat("Twitter's Chi-square score (G^2):", twitter_chisq, "\n")
 
 # d) Linear Regression Model on Daily Post Counts
 daily_counts <- df %>% 
@@ -74,27 +81,53 @@ cat("Saved Q1_Linear_Trend.png\n")
 # ================================================================
 # QUESTION 2: TEXT MINING & TOPIC DISCOVERY
 # ================================================================
-cat("\n--- RUNNING QUESTION 2 ---\n")
 
-# Observation periods: 13-18 July and 20-25 July 2026 (exclude 19 July)
+# --- Q2(a): Identify Top 3 Posts (Cập nhật để in đầy đủ Text, URL, Likes, Reposts) ---
+cat("\n--- Running Q2(a): Identify Top 3 Posts ---\n")
+
 dat <- df
+# Kiểm tra định dạng ngày của cột created_at
 dat$date_str <- substr(as.character(dat$created_at), 1, 10)
+
+# Lọc theo khung thời gian yêu cầu (13-18 và 20-25 tháng 7, loại bỏ 19/07)
 q2 <- dat[dat$date_str >= '2026-07-13' & dat$date_str <= '2026-07-25' &
             dat$date_str != '2026-07-19' & !is.na(dat$date_str), , drop = FALSE]
-q2$reply_count <- suppressWarnings(as.numeric(q2$reply_count))
-q2$like_count <- suppressWarnings(as.numeric(q2$like_count))
-q2$repost_count <- suppressWarnings(as.numeric(q2$repost_count))
 
-# Rank by replies, breaking ties by likes then reposts
-q2 <- q2[order(-q2$reply_count, -q2$like_count, -q2$repost_count, na.last = TRUE), , drop = FALSE]
-top3 <- head(q2, 3)
-top3$thread_id <- paste0('Thread_', seq_len(nrow(top3)))
+# Kiểm tra xem có dòng dữ liệu nào thỏa mãn không
+cat("Số lượng bài post tìm thấy trong khoảng thời gian lọc:", nrow(q2), "\n")
 
-post_url <- function(uri, handle) {
-  if (is.na(uri) || !nzchar(uri) || is.na(handle) || !nzchar(handle)) return(NA_character_)
-  paste0('https://bsky.app/profile/', handle, '/post/', sub('^.*/', '', uri))
+if(nrow(q2) > 0) {
+  q2$reply_count <- suppressWarnings(as.numeric(q2$reply_count))
+  q2$like_count <- suppressWarnings(as.numeric(q2$like_count))
+  q2$repost_count <- suppressWarnings(as.numeric(q2$repost_count))
+  
+  # Xếp hạng theo reply, nếu trùng reply thì xét đến likes rồi reposts
+  q2 <- q2[order(-q2$reply_count, -q2$like_count, -q2$repost_count, na.last = TRUE), , drop = FALSE]
+  top3 <- head(q2, 3)
+  top3$thread_id <- paste0('Thread_', seq_len(nrow(top3)))
+  
+  # Tạo hàm lấy URL chuẩn của Bluesky post
+  post_url <- function(uri, handle) {
+    if (is.na(uri) || !nzchar(uri) || is.na(handle) || !nzchar(handle)) return(NA_character_)
+    paste0('https://bsky.app/profile/', handle, '/post/', sub('^.*/', '', uri))
+  }
+  top3$post_url <- mapply(post_url, top3$uri, top3$author_handle, USE.NAMES = FALSE)
+  
+  # --- IN KẾT QUẢ RA CONSOLE THEO ĐÚNG YÊU CẦU ĐỀ BÀI ---
+  for(i in seq_len(nrow(top3))) {
+    cat(paste0("\n--------------------------------------------------\n"))
+    cat(paste0(">>> ", top3$thread_id[i], " <<<\n"))
+    cat(paste0("Author Handle : ", top3$author_handle[i], "\n"))
+    cat(paste0("Post URL      : ", top3$post_url[i], "\n"))
+    cat(paste0("Reply Count   : ", top3$reply_count[i], "\n"))
+    cat(paste0("Like Count    : ", top3$like_count[i], "\n"))
+    cat(paste0("Repost Count  : ", top3$repost_count[i], "\n"))
+    cat(paste0("Post Text     : ", top3$text[i], "\n"))
+  }
+  cat(paste0("\n--------------------------------------------------\n"))
+} else {
+  cat("LỖI: Không tìm thấy bài post nào trong khoảng thời gian trên! Hãy kiểm tra lại định dạng cột 'created_at' trong file CSV của nhóm.\n")
 }
-top3$post_url <- mapply(post_url, top3$uri, top3$author_handle, USE.NAMES = FALSE)
 
 # Fetch replies via public Bluesky API
 api <- 'https://public.api.bsky.app/xrpc/app.bsky.feed.getPostThread'
@@ -151,68 +184,123 @@ if (nrow(replies)) replies <- dplyr::distinct(replies, thread_id, reply_uri, .ke
 write.csv(replies, 'Q2_All_Replies.csv', row.names = FALSE, fileEncoding = 'UTF-8')
 cat("Saved Q2_All_Replies.csv with", nrow(replies), "replies.\n")
 
+# Tiền xử lý văn bản & tính tần suất từ
+clean_replies <- replies %>%
+  filter(!is.na(text), nzchar(trimws(text))) %>%
+  mutate(clean_text = str_to_lower(text),
+         clean_text = str_replace_all(clean_text, 'https?://\\S+', ' '),
+         clean_text = str_replace_all(clean_text, '@[a-zA-Z0-9._-]+', ' '),
+         clean_text = str_replace_all(clean_text, '[^a-z\\s]', ' '),
+         clean_text = str_squish(clean_text))
+
+tokens <- clean_replies %>%
+  select(thread_id, clean_text) %>%
+  unnest_tokens(word, clean_text) %>%
+  anti_join(tidytext::stop_words, by = 'word') %>%
+  filter(str_detect(word, '^[a-z]{2,}$'),
+         !word %in% c('amp', 'http', 'https', 'www', 'bsky', 'com', 'rt'))
+
+word_freq <- tokens %>% count(thread_id, word, name = 'frequency') %>% arrange(thread_id, desc(frequency))
+top15_words <- word_freq %>% group_by(thread_id) %>% slice_max(frequency, n = 15, with_ties = FALSE) %>% ungroup()
+write.csv(top15_words, 'Q2_Top15_Word_Frequencies.csv', row.names = FALSE)
+
+# Vẽ biểu đồ Top 15 từ vựng
+p_freq <- top15_words %>%
+  mutate(word = reorder_within(word, frequency, thread_id)) %>%
+  ggplot(aes(x = word, y = frequency)) +
+  geom_col(fill = '#3273a8') +
+  scale_x_reordered() + coord_flip() +
+  facet_wrap(~thread_id, scales = 'free_y') +
+  labs(title = 'Top 15 words in replies for each thread', x = 'Word', y = 'Frequency') +
+  theme_minimal()
+ggsave('Q2_Top15_Word_Frequencies.png', p_freq, width = 12, height = 8, dpi = 300)
+
+print(p_freq)
 
 # ================================================================
 # QUESTION 3: CLUSTERING & VISUALISATION
 # ================================================================
-cat("\n--- RUNNING QUESTION 3 ---\n")
 
-if (nrow(replies) > 0) {
-  replies_q3 <- replies %>% mutate(doc_id = row_number(), text = as.character(text))
-  
-  cleaned <- replies_q3 %>%
-    filter(!is.na(text), nzchar(trimws(text))) %>%
-    mutate(clean_text = str_to_lower(text),
-           clean_text = str_replace_all(clean_text, 'https?://\\S+', ' '),
-           clean_text = str_replace_all(clean_text, '@[a-zA-Z0-9._-]+', ' '),
-           clean_text = str_replace_all(clean_text, '[^a-z\\s]', ' '),
-           clean_text = str_squish(clean_text))
-  
-  tokens <- cleaned %>%
-    select(doc_id, clean_text) %>%
-    unnest_tokens(word, clean_text) %>%
-    anti_join(tidytext::stop_words, by = 'word') %>%
-    filter(str_detect(word, '^[a-z]{2,}$'),
-           !word %in% c('amp', 'http', 'https', 'www', 'bsky', 'com', 'rt'))
-  
-  tfidf <- tokens %>%
-    count(doc_id, word, name = 'n') %>%
-    bind_tf_idf(word, doc_id, n) %>%
-    filter(tf_idf > 0)
-  
-  dtm <- tfidf %>% cast_sparse(doc_id, word, tf_idf)
-  mat <- as.matrix(dtm)
-  
-  if (nrow(mat) >= 4 && ncol(mat) >= 2) {
-    row_norms <- sqrt(rowSums(mat^2))
-    mat <- mat / row_norms
-    valid_ids <- as.integer(rownames(mat))
-    
-    # K-means with K=6 (based on silhouette evaluation)
-    set.seed(42)
-    final_fit <- kmeans(mat, centers = 6, nstart = 100, iter.max = 100)
-    assignments <- data.frame(doc_id = valid_ids, cluster = factor(final_fit$cluster)) %>%
-      left_join(replies_q3 %>% select(doc_id, thread_id, text), by = 'doc_id')
-    
-    # PCA for 2D visualization
-    pca <- prcomp(mat, center = TRUE, scale. = FALSE)
-    coords <- data.frame(doc_id = valid_ids, PC1 = pca$x[, 1], PC2 = pca$x[, 2]) %>%
-      left_join(assignments, by = 'doc_id')
-    
-    var_explained <- 100 * (pca$sdev^2 / sum(pca$sdev^2))
-    p_cluster <- ggplot(coords, aes(x = PC1, y = PC2, color = cluster, shape = thread_id)) +
-      geom_point(size = 3, alpha = 0.85) +
-      labs(title = 'Clustering of Bluesky Replies (TF-IDF + K-means)',
-           subtitle = 'K = 6 | Colours = clusters; shapes = original threads',
-           x = sprintf('PC1 (%.1f%% variance)', var_explained[1]),
-           y = sprintf('PC2 (%.1f%% variance)', var_explained[2]),
-           color = 'Cluster', shape = 'Original thread') +
-      theme_minimal()
-    ggsave('Q3_Cluster_PCA.png', p_cluster, width = 10, height = 7, dpi = 300)
-    cat("Saved Q3_Cluster_PCA.png\n")
-  }
-}
+# --- Q3(a): Corpus Preparation & TF-IDF Vectorization ---
+cat("\n--- Running Q3(a): TF-IDF Vectorization ---\n")
+replies_q3 <- replies %>% mutate(doc_id = row_number(), text = as.character(text))
 
+cleaned_q3 <- replies_q3 %>%
+  filter(!is.na(text), nzchar(trimws(text))) %>%
+  mutate(clean_text = str_to_lower(text),
+         clean_text = str_replace_all(clean_text, 'https?://\\S+', ' '),
+         clean_text = str_replace_all(clean_text, '@[a-zA-Z0-9._-]+', ' '),
+         clean_text = str_replace_all(clean_text, '[^a-z\\s]', ' '),
+         clean_text = str_squish(clean_text))
+
+tokens_q3 <- cleaned_q3 %>%
+  select(doc_id, clean_text) %>%
+  unnest_tokens(word, clean_text) %>%
+  anti_join(tidytext::stop_words, by = 'word') %>%
+  filter(str_detect(word, '^[a-z]{2,}$'),
+         !word %in% c('amp', 'http', 'https', 'www', 'bsky', 'com', 'rt'))
+
+tfidf <- tokens_q3 %>%
+  count(doc_id, word, name = 'n') %>%
+  bind_tf_idf(word, doc_id, n) %>%
+  filter(tf_idf > 0)
+
+dtm <- tfidf %>% cast_sparse(doc_id, word, tf_idf)
+mat <- as.matrix(dtm)
+row_norms <- sqrt(rowSums(mat^2))
+mat <- mat / row_norms
+valid_ids <- as.integer(rownames(mat))
+
+
+# --- Q3(b): Optimal K Selection via Average Silhouette Width ---
+cat("\n--- Running Q3(b): Silhouette Width K Selection ---\n")
+set.seed(42)
+max_k <- min(6L, nrow(mat) - 1L)
+distances <- dist(mat, method = 'euclidean')
+ks <- 2:max_k
+sil_scores <- sapply(ks, function(k) {
+  fit <- kmeans(mat, centers = k, nstart = 50, iter.max = 100)
+  if (length(unique(fit$cluster)) < 2) return(NA_real_)
+  mean(cluster::silhouette(fit$cluster, distances)[, 'sil_width'])
+})
+k_selection <- data.frame(K = ks, avg_silhouette = sil_scores)
+print(k_selection)
+best_k <- k_selection$K[which.max(k_selection$avg_silhouette)]
+cat("Selected K:", best_k, "\n")
+
+
+# --- Q3(c): K-means Clustering Model ---
+cat("\n--- Running Q3(c): K-Means Clustering ---\n")
+set.seed(42)
+final_fit <- kmeans(mat, centers = best_k, nstart = 100, iter.max = 100)
+assignments <- data.frame(doc_id = valid_ids, cluster = factor(final_fit$cluster)) %>%
+  left_join(replies_q3 %>% select(doc_id, thread_id, text), by = 'doc_id')
+print(table(assignments$cluster))
+
+
+# --- Q3(d): PCA 2D Dimensionality Reduction & Visualization ---
+cat("\n--- Running Q3(d): PCA Visualization ---\n")
+pca <- prcomp(mat, center = TRUE, scale. = FALSE)
+coords <- data.frame(doc_id = valid_ids, PC1 = pca$x[, 1], PC2 = pca$x[, 2]) %>%
+  left_join(assignments, by = 'doc_id')
+
+var_explained <- 100 * (pca$sdev^2 / sum(pca$sdev^2))
+p_cluster <- ggplot(coords, aes(x = PC1, y = PC2, color = cluster, shape = thread_id)) +
+  geom_point(size = 3, alpha = 0.85) +
+  labs(title = 'Clustering of Bluesky Replies (TF-IDF + K-means)',
+       subtitle = paste('K =', best_k, '| Colours = clusters; shapes = original threads'),
+       x = sprintf('PC1 (%.1f%% variance)', var_explained[1]),
+       y = sprintf('PC2 (%.1f%% variance)', var_explained[2]),
+       color = 'Cluster', shape = 'Original thread') +
+  theme_minimal()
+ggsave('Q3_Cluster_PCA.png', p_cluster, width = 10, height = 7, dpi = 300)
+
+
+# --- Q3(e): Cluster vs. Original Thread Cross-Tabulation & Interpretation ---
+cat("\n--- Running Q3(e): Cross-Tabulation & Interpretation ---\n")
+cross_tab <- as.data.frame.matrix(table(assignments$thread_id, assignments$cluster))
+print(cross_tab)
+write.csv(cross_tab, 'Q3_Thread_Cluster_Table.csv', row.names = TRUE)
 
 # ================================================================
 # QUESTION 4: NETWORK ANALYSIS (BLUESKY)
