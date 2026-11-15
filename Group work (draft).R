@@ -305,56 +305,119 @@ write.csv(cross_tab, 'Q3_Thread_Cluster_Table.csv', row.names = TRUE)
 # ================================================================
 # QUESTION 4: NETWORK ANALYSIS (BLUESKY)
 # ================================================================
-cat("\n--- RUNNING QUESTION 4 ---\n")
 
-# Authenticate Bluesky (replace with your handle and app password)
-auth(user = "mnguyet05.bsky.social", password = "niwh-auko-ivtu-geoy")
+# --- Q4(a): Identification of Core Active Users ---
+cat("\n--- Running Q4(a): Top 3 Active Users ---\n")
 
-# Identify top 3 users by post count in dataset
-top3 <- df %>% count(author_handle, sort = TRUE) %>% head(3)
-print(top3)
-target_users <- top3$author_handle
+top3_users <- df %>%
+  filter(!is.na(author_handle), nzchar(trimws(author_handle))) %>%
+  count(author_handle, sort = TRUE, name = "post_count") %>%
+  head(3)
+
+print(top3_users)
+target_users <- top3_users$author_handle
+
+
+# --- Q4(b): Network Construction & Topology ---
+cat("\n--- Running Q4(b): Fetching Followers & Following via Public API ---\n")
+
+# Hàm lấy danh sách followers/follows trực tiếp từ Bluesky Public API (không cần auth)
+fetch_bsky_connections <- function(actor, type = c("followers", "follows"), limit = 50) {
+  type <- match.arg(type)
+  endpoint <- if (type == "followers") {
+    "https://public.api.bsky.app/xrpc/app.bsky.graph.getFollowers"
+  } else {
+    "https://public.api.bsky.app/xrpc/app.bsky.graph.getFollows"
+  }
+  
+  res <- tryCatch({
+    resp <- httr::GET(endpoint, query = list(actor = actor, limit = limit), httr::timeout(30))
+    httr::stop_for_status(resp)
+    jsonlite::fromJSON(httr::content(resp, as = "text", encoding = "UTF-8"), simplifyVector = FALSE)
+  }, error = function(e) {
+    message("API Error (", type, ") for ", actor, ": ", e$message)
+    return(NULL)
+  })
+  
+  if (is.null(res)) return(character(0))
+  items <- if (type == "followers") res$followers else res$follows
+  if (is.null(items) || length(items) == 0) return(character(0))
+  
+  handles <- sapply(items, function(x) if (!is.null(x$handle)) as.character(x$handle) else NA_character_)
+  handles[!is.na(handles) & nzchar(handles)]
+}
 
 edges <- data.frame(from = character(), to = character(), stringsAsFactors = FALSE)
 
 for (user in target_users) {
-  message("Fetching network for: ", user)
+  cat("Fetching network for:", user, "\n")
   
-  # Fetch followers
-  tryCatch({
-    foll <- get_followers(user, limit = 50)
-    if (nrow(foll) > 0) {
-      edges <- rbind(edges, data.frame(from = foll$actor_handle, to = user))
-    }
-  }, error = function(e) message("Error fetching followers for ", user))
-  Sys.sleep(3)
+  # 1. Lấy tối đa 50 followers (người khác follow user -> cạnh từ follower tới user)
+  foll_handles <- fetch_bsky_connections(user, type = "followers", limit = 50)
+  if (length(foll_handles) > 0) {
+    edges <- rbind(edges, data.frame(from = foll_handles, to = user, stringsAsFactors = FALSE))
+  }
+  Sys.sleep(2)
   
-  # Fetch follows
-  tryCatch({
-    following <- get_follows(user, limit = 50)
-    if (nrow(following) > 0) {
-      edges <- rbind(edges, data.frame(from = user, to = following$actor_handle))
-    }
-  }, error = function(e) message("Error fetching following for ", user))
-  Sys.sleep(3)
+  # 2. Lấy tối đa 50 following (user follow người khác -> cạnh từ user tới following)
+  follow_handles <- fetch_bsky_connections(user, type = "follows", limit = 50)
+  if (length(follow_handles) > 0) {
+    edges <- rbind(edges, data.frame(from = user, to = follow_handles, stringsAsFactors = FALSE))
+  }
+  Sys.sleep(2)
 }
 
-edges <- edges %>% filter(!is.na(from) & !is.na(to))
-net <- graph_from_data_frame(edges, directed = TRUE)
+# Lọc trùng và loại bỏ giá trị NA
+edges <- edges %>%
+  filter(!is.na(from) & !is.na(to)) %>%
+  distinct()
 
-# Save Network Plot
-png("Q4_Network_Graph.png", width = 800, height = 800)
-plot(net, 
-     vertex.size = 3, 
-     vertex.label = ifelse(V(net)$name %in% target_users, V(net)$name, NA),
-     vertex.label.color = "red",
-     vertex.label.cex = 1.2,
-     edge.arrow.size = 0.3,
-     main = "Bluesky Network: Top 3 Active Users")
-dev.off()
-cat("Saved Q4_Network_Graph.png\n")
+cat("Total nodes connected / Total edges retrieved:", nrow(edges), "\n")
+write.csv(edges, "Q4_Network_Edges.csv", row.names = FALSE)
 
-# Centrality Metrics
+if (nrow(edges) > 0) {
+  net <- graph_from_data_frame(edges, directed = TRUE)
+  
+  # Thiết lập màu sắc và kích thước để làm nổi bật 3 seed users
+  is_seed <- V(net)$name %in% target_users
+  V(net)$color <- ifelse(is_seed, "#e63946", "#457b9d")
+  V(net)$size <- ifelse(is_seed, 9, 3.5)
+  V(net)$label <- ifelse(is_seed, V(net)$name, NA)
+  
+  set.seed(42)
+  layout_fr <- layout_with_fr(net)
+  
+  # 1. Xuất ra file PNG chất lượng cao để làm Poster / chèn Word
+  png("Q4_Network_Graph.png", width = 1200, height = 1200, res = 150)
+  plot(net,
+       layout = layout_fr,
+       vertex.frame.color = NA,
+       vertex.label.color = "#1d3557",
+       vertex.label.cex = 0.9,
+       vertex.label.font = 2,
+       edge.arrow.size = 0.25,
+       edge.color = adjustcolor("gray60", alpha.f = 0.5),
+       main = "Bluesky Directed Network: Top 3 Active Users")
+  dev.off()
+  
+  # 2. Vẽ trực tiếp để hiển thị trong file RMarkdown khi Knit
+  plot(net,
+       layout = layout_fr,
+       vertex.frame.color = NA,
+       vertex.label.color = "#1d3557",
+       vertex.label.cex = 0.85,
+       vertex.label.font = 2,
+       edge.arrow.size = 0.25,
+       edge.color = adjustcolor("gray60", alpha.f = 0.5),
+       main = "Bluesky Directed Network: Top 3 Active Users")
+} else {
+  stop("Không lấy được dữ liệu mạng lưới từ API. Vui lòng kiểm tra kết nối mạng.")
+}
+
+
+# --- Q4(c): Centrality Metrics & PageRank Evaluation ---
+cat("\n--- Running Q4(c): Centrality & PageRank ---\n")
+
 in_deg <- degree(net, mode = "in")
 out_deg <- degree(net, mode = "out")
 pr <- page_rank(net)$vector
@@ -363,10 +426,17 @@ network_stats <- data.frame(
   User = V(net)$name,
   InDegree = in_deg,
   OutDegree = out_deg,
-  PageRank = pr
+  PageRank = round(pr, 4),
+  stringsAsFactors = FALSE
 )
 
-cat("\nTop 1 In-Degree:\n"); print(network_stats %>% arrange(desc(InDegree)) %>% head(1))
-cat("Top 1 Out-Degree:\n"); print(network_stats %>% arrange(desc(OutDegree)) %>% head(1))
-cat("Top 1 PageRank:\n"); print(network_stats %>% arrange(desc(PageRank)) %>% head(1))
+cat("\nTop 3 In-Degree:\n")
+print(network_stats %>% arrange(desc(InDegree)) %>% head(3))
 
+cat("\nTop 3 Out-Degree:\n")
+print(network_stats %>% arrange(desc(OutDegree)) %>% head(3))
+
+cat("\nTop 3 PageRank:\n")
+print(network_stats %>% arrange(desc(PageRank)) %>% head(3))
+
+write.csv(network_stats %>% arrange(desc(PageRank)), "Q4_Centrality_Metrics.csv", row.names = FALSE)
